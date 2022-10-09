@@ -120,6 +120,17 @@ impl Wallet {
 
         Ok(txid)
     }
+
+    // Sends Bitcoin to a recipient address
+    pub fn send_btc(&self, recipient: &str, amount: u64) -> Result<Txid, bdk::Error> {
+        let mut psbt: String = self.create_tx(recipient, amount)?;
+
+        let psbt: String = self.sign_tx(&mut psbt)?;
+
+        let txid: Txid = self.broadcast_tx(&psbt)?;
+
+        Ok(txid)
+    }
 }
 
 #[cfg(test)]
