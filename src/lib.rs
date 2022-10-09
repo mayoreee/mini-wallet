@@ -1,5 +1,13 @@
 pub mod utils;
 
+use base64;
+use std::str::FromStr;
+
+use bdk::bitcoin::consensus::serialize;
+use bdk::bitcoin::Address;
+use bdk::wallet::AddressIndex::New;
+use bdk::wallet::AddressInfo;
+use bdk::FeeRate;
 use bdk::{
     blockchain::ElectrumBlockchain, database::MemoryDatabase, electrum_client::Client, SyncOptions,
 };
@@ -43,6 +51,34 @@ impl Wallet {
 
         Ok(bdk_wallet)
     }
+
+    /// Returns a Partially Signed Bitcoin Transaction (PSBT)
+    pub fn create_tx(&self, recipient: &str, amount: u64) -> Result<String, bdk::Error> {
+        let wallet = self.create_wallet()?;
+
+        let recipient_address: Address = Address::from_str(recipient).unwrap();
+
+        let (psbt, _details) = {
+            let mut builder = wallet.build_tx();
+            builder
+                .add_recipient(recipient_address.script_pubkey(), amount)
+                .enable_rbf()
+                .fee_rate(FeeRate::from_sat_per_vb(1.0));
+            builder.finish()?
+        };
+
+        // Encoded PSBT as base64
+        let psbt_encoded = base64::encode(&serialize(&psbt));
+
+        Ok(psbt_encoded)
+    }
+
+    // Returns a derived address using external descriptor
+    pub fn get_address(&self) -> Result<AddressInfo, bdk::Error> {
+        let wallet = self.create_wallet()?;
+        let address: AddressInfo = wallet.get_address(New)?;
+        Ok(address)
+    }
 }
 
 #[cfg(test)]
@@ -64,5 +100,18 @@ mod tests {
             result.as_ref().unwrap().network(),
             bdk::bitcoin::Network::Testnet
         ); // wallet should use the correct bitcoin network
+    }
+
+    #[test]
+    fn test_create_tx() {
+        let wallet: Wallet = Wallet {
+      descriptor: String::from("wpkh([c258d2e4/84'/1'/0']tpubDDYkZojQFQjht8Tm4jsS3iuEmKjTiEGjG6KnuFNKKJb5A6ZUCUZKdvLdSDWofKi4ToRCwb9poe1XdqfUnP4jaJjCB2Zwv11ZLgSbnZSNecE/0/*)#l76duyv7"),
+      change_descriptor: String::from("wpkh([e9824965/84'/1'/0']tprv8fvem7qWxY3SGCQczQpRpqTKg455wf1zgixn6MZ4ze8gRfHjov5gXBQTadNfDgqs9ERbZZ3Bi1PNYrCCusFLucT39K525MWLpeURjHwUsfX/1/*)"),
+network: Network::Testnet
+    };
+
+        let recipient = wallet.get_address().unwrap().to_string();
+        let result = wallet.create_tx(&recipient, 1_000);
+        assert_eq!(result.is_ok(), true); // transaction should be created
     }
 }
