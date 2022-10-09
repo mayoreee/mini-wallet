@@ -3,15 +3,14 @@ pub mod utils;
 use base64;
 use std::str::FromStr;
 
-use bdk::bitcoin::consensus::serialize;
-use bdk::bitcoin::Address;
+use bdk::bitcoin::consensus::{deserialize, serialize};
 use bdk::bitcoin::psbt::PartiallySignedTransaction;
+use bdk::bitcoin::{Address, Transaction, Txid};
+use bdk::blockchain::{Blockchain, ElectrumBlockchain};
 use bdk::wallet::AddressIndex::New;
 use bdk::wallet::AddressInfo;
+use bdk::{database::MemoryDatabase, electrum_client::Client, SyncOptions};
 use bdk::{FeeRate, SignOptions};
-use bdk::{
-    blockchain::ElectrumBlockchain, database::MemoryDatabase, electrum_client::Client, SyncOptions,
-};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Network {
@@ -83,20 +82,44 @@ impl Wallet {
 
     /// Signs a PSBT with all the wallet's signers
     pub fn sign_tx(&self, psbt: &mut str) -> Result<String, bdk::Error> {
-      let wallet = self.create_wallet()?;
+        let wallet = self.create_wallet()?;
 
-      let mut psbt: PartiallySignedTransaction = PartiallySignedTransaction::from_str(psbt)?;
+        let mut psbt: PartiallySignedTransaction = PartiallySignedTransaction::from_str(psbt)?;
 
-      let finalized: bool = wallet.sign(&mut psbt, SignOptions::default())?;
+        let finalized: bool = wallet.sign(&mut psbt, SignOptions::default())?;
 
-      // Ensure psbt is finalized
-      assert_eq!(finalized, true);
+        // Ensure psbt is finalized
+        assert_eq!(finalized, true);
 
-      // Encode PSBT as base64
-      let psbt_encoded: String = base64::encode(&serialize(&psbt));
+        // Encode PSBT as base64
+        let psbt_encoded: String = base64::encode(&serialize(&psbt));
 
-      Ok(psbt_encoded)
-  }
+        Ok(psbt_encoded)
+    }
+
+    // Broadcasts a transaction to the network
+    pub fn broadcast_tx(&self, psbt: &str) -> Result<Txid, bdk::Error> {
+        let client: Client = Client::new("ssl://electrum.blockstream.info:60002")?;
+        let blockchain: ElectrumBlockchain = ElectrumBlockchain::from(client);
+
+        let wallet: bdk::Wallet<MemoryDatabase> = self.create_wallet()?;
+
+        let mut psbt: PartiallySignedTransaction = deserialize(&base64::decode(psbt).unwrap())?;
+
+        let finalized: bool = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+
+        // Ensure psbt is finalized
+        assert_eq!(finalized, true);
+
+        let raw_tx: Transaction = psbt.extract_tx();
+
+        let txid: Txid = raw_tx.txid();
+
+        // Broadcast transaction
+        blockchain.broadcast(&raw_tx)?;
+
+        Ok(txid)
+    }
 }
 
 #[cfg(test)]
@@ -144,5 +167,19 @@ network: Network::Testnet
         let mut psbt = wallet.create_tx(&recipient, 1_000).unwrap();
         let result = wallet.sign_tx(&mut psbt);
         assert_eq!(result.is_ok(), true); // signed transaction should be created
+    }
+
+    #[test]
+    fn test_broadcast_tx() {
+        let wallet: Wallet = Wallet {
+      descriptor: String::from("wpkh([e9824965/84'/1'/0']tprv8fvem7qWxY3SGCQczQpRpqTKg455wf1zgixn6MZ4ze8gRfHjov5gXBQTadNfDgqs9ERbZZ3Bi1PNYrCCusFLucT39K525MWLpeURjHwUsfX/0/*)"),
+      change_descriptor: String::from("wpkh([e9824965/84'/1'/0']tprv8fvem7qWxY3SGCQczQpRpqTKg455wf1zgixn6MZ4ze8gRfHjov5gXBQTadNfDgqs9ERbZZ3Bi1PNYrCCusFLucT39K525MWLpeURjHwUsfX/1/*)"),
+      network: Network::Testnet
+    };
+        let recipient = wallet.get_address().unwrap().to_string();
+        let mut psbt = wallet.create_tx(&recipient, 1_000).unwrap();
+        let psbt = wallet.sign_tx(&mut psbt).unwrap();
+        let result = wallet.broadcast_tx(&psbt);
+        assert_eq!(result.is_ok(), true); // ensure transaction is broadcasted
     }
 }
