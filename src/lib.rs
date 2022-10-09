@@ -5,9 +5,10 @@ use std::str::FromStr;
 
 use bdk::bitcoin::consensus::serialize;
 use bdk::bitcoin::Address;
+use bdk::bitcoin::psbt::PartiallySignedTransaction;
 use bdk::wallet::AddressIndex::New;
 use bdk::wallet::AddressInfo;
-use bdk::FeeRate;
+use bdk::{FeeRate, SignOptions};
 use bdk::{
     blockchain::ElectrumBlockchain, database::MemoryDatabase, electrum_client::Client, SyncOptions,
 };
@@ -67,18 +68,35 @@ impl Wallet {
             builder.finish()?
         };
 
-        // Encoded PSBT as base64
+        // Encode PSBT as base64
         let psbt_encoded = base64::encode(&serialize(&psbt));
 
         Ok(psbt_encoded)
     }
 
-    // Returns a derived address using external descriptor
+    /// Returns a derived address using external descriptor
     pub fn get_address(&self) -> Result<AddressInfo, bdk::Error> {
         let wallet = self.create_wallet()?;
         let address: AddressInfo = wallet.get_address(New)?;
         Ok(address)
     }
+
+    /// Signs a PSBT with all the wallet's signers
+    pub fn sign_tx(&self, psbt: &mut str) -> Result<String, bdk::Error> {
+      let wallet = self.create_wallet()?;
+
+      let mut psbt: PartiallySignedTransaction = PartiallySignedTransaction::from_str(psbt)?;
+
+      let finalized: bool = wallet.sign(&mut psbt, SignOptions::default())?;
+
+      // Ensure psbt is finalized
+      assert_eq!(finalized, true);
+
+      // Encode PSBT as base64
+      let psbt_encoded: String = base64::encode(&serialize(&psbt));
+
+      Ok(psbt_encoded)
+  }
 }
 
 #[cfg(test)]
@@ -113,5 +131,18 @@ network: Network::Testnet
         let recipient = wallet.get_address().unwrap().to_string();
         let result = wallet.create_tx(&recipient, 1_000);
         assert_eq!(result.is_ok(), true); // transaction should be created
+    }
+
+    #[test]
+    fn test_sign_tx() {
+        let wallet: Wallet = Wallet {
+      descriptor: String::from("wpkh([e9824965/84'/1'/0']tprv8fvem7qWxY3SGCQczQpRpqTKg455wf1zgixn6MZ4ze8gRfHjov5gXBQTadNfDgqs9ERbZZ3Bi1PNYrCCusFLucT39K525MWLpeURjHwUsfX/0/*)"),
+      change_descriptor: String::from("wpkh([e9824965/84'/1'/0']tprv8fvem7qWxY3SGCQczQpRpqTKg455wf1zgixn6MZ4ze8gRfHjov5gXBQTadNfDgqs9ERbZZ3Bi1PNYrCCusFLucT39K525MWLpeURjHwUsfX/1/*)"),
+      network: Network::Testnet
+    };
+        let recipient = wallet.get_address().unwrap().to_string();
+        let mut psbt = wallet.create_tx(&recipient, 1_000).unwrap();
+        let result = wallet.sign_tx(&mut psbt);
+        assert_eq!(result.is_ok(), true); // signed transaction should be created
     }
 }
